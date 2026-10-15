@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { createSdkAgent } = require('./cline-sdk');
 
 // Configuration
 const PORT = process.env.PORT || 3000;
@@ -20,6 +21,7 @@ const CLINE_PROVIDER = process.env.CLINE_PROVIDER || '';
 const CLINE_MODEL = process.env.CLINE_MODEL || '';
 const CLINE_API_KEY = process.env.CLINE_API_KEY || '';
 const CLINE_THINKING = process.env.CLINE_THINKING || '';
+const CLINE_RUNTIME = process.env.CLINE_RUNTIME || 'sdk';
 // Keep only recent turns when replaying conversation context (costs input tokens)
 const MAX_HISTORY_MESSAGES = parseInt(process.env.CLINE_MAX_HISTORY || '20', 10);
 
@@ -27,6 +29,7 @@ const MAX_HISTORY_MESSAGES = parseInt(process.env.CLINE_MAX_HISTORY || '20', 10)
 const authedClients = new Set();
 const conversations = new Map();   // clientId -> [{ role, content }]
 const runningTasks = new Map();    // clientId -> ChildProcess
+const runningAgents = new Map();   // clientId -> { agent, cancelled }
 const partials = new Map();        // clientId -> streamed-so-far text
 const stoppedClients = new Set();  // clientId with an intentional stop
 
@@ -333,7 +336,16 @@ function handleChatMessage(clientId, message) {
         sendTo(clientId, { type: 'error', payload: { error: 'OpenRouter key missing: configure it in the app Settings.' } });
         return;
     }
-    runCline(clientId, conversationId, text.trim(), { provider, model, apiKey: apiKey.trim() });
+    if (CLINE_RUNTIME === 'cli') {
+        runClineCli(clientId, conversationId, text.trim(), { provider, model, apiKey: apiKey.trim() });
+    } else if (CLINE_RUNTIME === 'sdk') {
+        runClineSdk(clientId, conversationId, text.trim(), { provider, model, apiKey: apiKey.trim() });
+    } else {
+        sendTo(clientId, {
+            type: 'error',
+            payload: { error: `Unsupported CLINE_RUNTIME "${sanitizeErrorText(CLINE_RUNTIME)}"; use "sdk" or "cli".` }
+        });
+    }
 }
 
 async function handleMessage(clientId, message) {
@@ -521,11 +533,101 @@ function buildClineArgs(config = {}) {
     return args;
 }
 
+async function runClineSdk(clientId, conversationId, userText, config) {
+    stopCline(clientId);
+
+    const contextKey = conversationKey(clientId, conversationId);
+    const history = conversations.get(contextKey) || [];
+    const task = { agent: null, cancelled: false };
+    runningAgents.set(clientId, task);
+    partials.set(clientId, '');
+
+    try {
+        const agent = await createSdkAgent({
+            apiKey: config.apiKey,
+            conversationId: contextKey,
+            cwd: CLINE_CWD,
+            history: history.slice(-MAX_HISTORY_MESSAGES),
+            model: config.model
+        });
+        task.agent = agent;
+        if (task.cancelled) {
+            agent.abort();
+            stoppedClients.delete(clientId);
+            return;
+        }
+
+        const unsubscribe = agent.subscribe((event) => {
+            if (runningAgents.get(clientId) !== task) return;
+            if (event.type === 'assistant-text-delta' && event.text) {
+                partials.set(clientId, (partials.get(clientId) || '') + event.text);
+                sendTo(clientId, { type: 'chat_stream', payload: { text: event.text } });
+            }
+        });
+
+        try {
+            const result = await agent.run(userText);
+            const wasStopped = stoppedClients.delete(clientId);
+            if (task.cancelled && !wasStopped) return;
+
+            const partial = partials.get(clientId) || '';
+            if (result.status === 'completed' && result.outputText.trim()) {
+                conversations.set(contextKey, [
+                    ...history,
+                    { role: 'user', content: userText },
+                    { role: 'assistant', content: result.outputText }
+                ]);
+                sendTo(clientId, {
+                    type: 'chat_message',
+                    payload: {
+                        message: {
+                            id: msgId(),
+                            role: 'assistant',
+                            content: result.outputText,
+                            timestamp: Date.now()
+                        }
+                    }
+                });
+            } else if (wasStopped || result.status === 'aborted') {
+                const response = partial || '(Stopped)';
+                conversations.set(contextKey, [
+                    ...history,
+                    { role: 'user', content: userText },
+                    { role: 'assistant', content: response }
+                ]);
+                sendTo(clientId, {
+                    type: 'chat_message',
+                    payload: {
+                        message: { id: msgId(), role: 'assistant', content: response, timestamp: Date.now() }
+                    }
+                });
+            } else {
+                const detail = result.error?.message || agent.snapshot().lastError;
+                throw new Error(detail || `Cline SDK run ended with status ${result.status} without output.`);
+            }
+        } finally {
+            unsubscribe();
+        }
+    } catch (error) {
+        const wasStopped = stoppedClients.delete(clientId);
+        if (!task.cancelled || wasStopped) {
+            const detail = sanitizeErrorText(error && error.message ? error.message : error);
+            console.error('Cline SDK error:', detail);
+            sendTo(clientId, { type: 'error', payload: { error: `Cline SDK: ${detail}` } });
+        }
+    } finally {
+        if (runningAgents.get(clientId) === task) {
+            runningAgents.delete(clientId);
+            partials.delete(clientId);
+        }
+    }
+}
+
 // Run a single Cline task for a client. Each turn is a fresh session that
 // replays recent conversation context in the prompt, working around the broken
 // `--id` resume in --json mode (cline/cline#10856). Streams NDJSON events back
 // to the app as chat_stream / chat_message / error bridge messages.
-function runCline(clientId, conversationId, userText, config) {
+function runClineCli(clientId, conversationId, userText, config) {
     stopCline(clientId);
 
     const contextKey = conversationKey(clientId, conversationId);
@@ -678,6 +780,12 @@ function extractDelta(e) {
 }
 
 function stopCline(clientId) {
+    const agentTask = runningAgents.get(clientId);
+    if (agentTask) {
+        agentTask.cancelled = true;
+        if (agentTask.agent) agentTask.agent.abort();
+        runningAgents.delete(clientId);
+    }
     const child = runningTasks.get(clientId);
     if (child) {
         try { child.kill('SIGTERM'); } catch (e) { /* ignore */ }
@@ -737,9 +845,11 @@ module.exports = {
     serverState,
     // Cline integration + auth helpers (exposed for tests)
     buildClineArgs,
+    createSdkAgent,
     conversationKey,
     extractDelta,
     formatClineError,
     fetchUser,
-    handleMessage
+    handleMessage,
+    toSdkMessages: require('./cline-sdk').toSdkMessages
 };
