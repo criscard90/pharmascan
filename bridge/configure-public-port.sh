@@ -10,7 +10,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 NODE_MAJOR=$(node -p "Number(process.versions.node.split('.')[0])")
 if [ "$NODE_MAJOR" -lt 22 ]; then
-  echo "ERROR: Cline SDK requires Node.js 22 or newer (found $(node --version)); bridge not started." >&2
+  echo "ERROR: Cline requires Node.js 22 or newer (found $(node --version)); bridge not started." >&2
   exit 1
 fi
 if ! command -v npm >/dev/null 2>&1; then
@@ -21,11 +21,9 @@ if ! npm install --no-audit --no-fund; then
   echo "ERROR: bridge dependency installation failed; bridge not started." >&2
   exit 1
 fi
-if ! command -v cline >/dev/null 2>&1; then
-  if ! npm install --global --no-audit --no-fund cline; then
-    echo "ERROR: optional Cline CLI fallback installation failed; bridge not started." >&2
-    exit 1
-  fi
+if [ ! -x node_modules/.bin/cline ]; then
+  echo "ERROR: the pinned Cline CLI is unavailable; bridge not started." >&2
+  exit 1
 fi
 
 if ! pgrep -f '[n]ode .*server\.js' >/dev/null; then
