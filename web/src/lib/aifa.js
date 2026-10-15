@@ -18,16 +18,46 @@ const DEMO = {
 
 export async function lookupAifa(aic, extra) {
   extra = extra || {};
-  const url = getFunctionUrl();
-  if (url) {
+  // Prima proviamo a usare l'URL configurato dall'utente (funzione Cloud Function)
+  const functionUrl = getFunctionUrl();
+  if (functionUrl) {
     try {
-      const r = await fetch(url.replace(/\/$/, '') + '?aic=' + encodeURIComponent(aic), { headers: { Accept: 'application/json' } });
+      const r = await fetch(functionUrl.replace(/\/$/, '') + '?aic=' + encodeURIComponent(aic), { 
+        headers: { Accept: 'application/json' } 
+      });
       if (r.ok) {
         const j = await r.json();
         return { aic, nome: j.nome || j.name || 'Farmaco ' + aic, principioAttivo: j.principioAttivo || j.active || '', titolare: j.titolare || j.holder || '', stato: j.stato || j.status || '', fogliettoUrl: j.fogliettoUrl || j.leaflet || '', lotto: extra.lotto || null, scadenza: extra.scadenza || null, seriale: extra.seriale || null, gtin: extra.gtin || null, fonte: 'aifa-function' };
       }
-    } catch (e) { console.warn('function AIFA non raggiungibile', e); }
+    } catch (e) {
+      console.warn('Funzione AIFA non raggiungibile (URL configurato):', e);
+    }
   }
+  // Se nessun URL personalizzato, usiamo il base URL di AIFA
+  const aiFaBase = 'https://medicinali.aifa.gov.it';
+  try {
+    const r = await fetch(aiFaBase + '/it/detail?aic=' + aic, { 
+      headers: { Accept: 'text/html' } 
+    });
+    if (r.ok) {
+      const html = await r.text();
+      const pick = function (rx) { const m = html.match(rx); return m ? m[1].trim() : ''; };
+      const nome = pick(/<h1[^>]*>([^<]+)<\/h1>/i) || pick(/<title>([^<]+)<\/title>/i);
+      if (nome) {
+        return {
+          aic, nome,
+          principioAttivo: pick(/principio attivo[^<]*<[^>]*>([^<]+)/i),
+          titolare: pick(/titolare[^<]*<[^>]*>([^<]+)/i),
+          stato: pick(/stato[^<]*<[^>]*>([^<]+)/i),
+          fogliettoUrl: aiFaBase + '/it/detail?aic=' + aic,
+          fonte: 'aifa-scrape'
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('Fallback AIFA non raggiungibile:', e);
+  }
+  // Ultimo tentativo: dizionario demo
   const d = DEMO[aic];
   if (d) return Object.assign({ aic }, d, { lotto: extra.lotto || null, scadenza: extra.scadenza || null, seriale: extra.seriale || null, gtin: extra.gtin || null, fonte: 'demo' });
   return { aic, nome: 'Farmaco AIC ' + aic + ' (dati da completare)', principioAttivo: '', titolare: '', stato: '', fogliettoUrl: 'https://medicinali.aifa.gov.it', lotto: extra.lotto || null, scadenza: extra.scadenza || null, seriale: extra.seriale || null, gtin: extra.gtin || null, fonte: 'sconosciuto' };
