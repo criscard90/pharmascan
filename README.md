@@ -4,7 +4,11 @@ Spec: `Specifiche Tecniche - App PWA Scansione Farmaci e AIFA.docx` (§1-§5).
 
 ## Struttura
 - `web/` — PWA Vite + Vanilla JS (manifest, SW, scanner ZXing, parsing AIC/GS1, store Firestore+locale)
-- `functions/` — Cloud Function `lookupAic` (middleware anti-CORS verso AIFA)
+  - lookup AIFA **diretto** (`web/src/lib/aifa.js`): l'API open-data
+    `https://api.aifa.gov.it/aifa-bdf-eif-be/1.0.0` espone `Access-Control-Allow-Origin: *`,
+    quindi **non serve nessun proxy/worker anti-CORS**.
+- `worker/` — legacy non usato (tenuto solo per riferimento, non referenziato dalla UI)
+- `functions/` — legacy non usato (tenuto solo per riferimento, non referenziato dalla UI)
 
 ## Deploy su GitHub Pages (per provarla da mobile)
 
@@ -45,11 +49,13 @@ VITE_FB_PROJECT=...
 ```
 L'armadietto usa Firestore (`armadietto/{AIC}`) con persistenza IndexedDB; senza config usa `localStorage`.
 
-## URL Cloud Function AIFA
-Deploy `functions/` su Firebase, poi incolla l'URL HTTPS nella UI (sezione Armadietto → campo URL).
-Senza URL, lookup usa fallback demo/locale (AIC+lotto+scadenza salvati comunque).
+## URL AIFA (diretto, nessun proxy da configurare)
+Nessuna configurazione richiesta: l'app chiama direttamente
+`https://api.aifa.gov.it/aifa-bdf-eif-be/1.0.0/formadosaggio/ricerca?query={AIC}&page=0`
+(verificato: risponde con `Access-Control-Allow-Origin: *`, quindi niente CORS da aggirare).
+Senza rete, il lookup mostra DEMO/sconosciuto ma AIC+lotto+scadenza vengono salvati comunque.
 
-## Test parser (Code32 + GS1)
+## Test parser (Code32 + GS1 italiano DM 6/3/2025 con AI 716)
 ```bash
 cd web
 node test/parse.test.mjs
