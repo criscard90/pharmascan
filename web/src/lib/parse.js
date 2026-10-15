@@ -3,11 +3,22 @@
 // - GS1 DataMatrix italiano: AI 01 GTIN(14) + 21 seriale + 17 scadenza(6) + 10 lotto + 716 AIC(9).
 //   (NO AI 7001: quello è di altri paesi; in Italia l'AIC viaggia con AI nazionale 716.)
 // - Riga stampata HRI: "PC:.. SN:.. SCAD:.. LOTTO:.. AIC:.."
-const GS = String.fromCharCode(29);
+export const GS = String.fromCharCode(29);
+const RS = String.fromCharCode(30);
+const US = String.fromCharCode(31);
+const EOT = String.fromCharCode(4);
 
 export function normalizeRaw(input) {
   if (input == null) return '';
-  let s = String(input).trim().toUpperCase();
+  let s = String(input);
+  // Varianti hardware del separatore FNC1->GS:
+  // - ZXing/DataMatrix reale: ASCII 29 <GS> (DecodedBitStreamParser: codeword 232 -> char 29).
+  // - Alcuni scanner BT/USB-HID: RS(30), US(31) o EOT(04) al posto di GS,
+  //   oppure placeholder testuali "<FNC1>", "{GS}", "[GS]" (alcuni wedge inviano
+  //   letteralmente la stringa invece del controllo).
+  s = s.split(RS).join(GS).split(US).join(GS).split(EOT).join(GS);
+  s = s.replace(/<\s*(FNC1|GS|RS)\s*>|\{\s*(FNC1|GS|RS)\s*\}|\[\s*(FNC1|GS)\s*\]/gi, GS);
+  s = s.trim().toUpperCase();
   for (const a of ['<FNC1>', '<GS>', '{FNC1}', '{GS}']) s = s.split(a).join(GS);
   return s;
 }
@@ -36,6 +47,12 @@ export function parseGS1(rawInput) {
     // Variabili (terminate da <GS> o fine stringa): 10 lotto, 21 seriale.
     // (7001 tenuto per compatibilità con DataMatrix esteri/demo.)
     const vari = { 10: 1, 21: 1, 7001: 1 };
+    // AI note nell'ordine tipico del DataMatrix farmaceutico IT:
+    // 01(GTIN) 21(seriale) 17(scadenza) 10(lotto) 716(AIC).
+    // Serve per ri-splittare i campi variabili quando lo scanner fonde
+    // tutto in una stringa continua SENZA <GS> (caso tipico da fotocamera
+    // se il wedge/lib perde il codeword FNC1 232 -> ASCII 29).
+    const KNOWN_AI_RE = /01(?=\d{14})|17(?=\d{6})|716(?=\d{9})|7001(?=\d+)|10|21/g;
     let i = 0, guard = 0;
     while (i < s.length && guard++ < 60) {
       let id = null;
@@ -51,7 +68,25 @@ export function parseGS1(rawInput) {
         if (s[i] === GS) i++;
       } else {
         const nx = s.indexOf(GS, i);
-        if (nx === -1) { ai[id] = s.substring(i); i = s.length; }
+        if (nx === -1) {
+          // Niente <GS>: cerca il prossimo AI noto più avanti e taglia lì,
+          // altrimenti lotto+seriale si fondono ("AI che si fondono" di Gemini).
+          // Es. "...2112345678901727103010112..." senza GS dopo il seriale:
+          // il "17" di scadenza va riconosciuto come nuovo AI, non come coda.
+          let cut = -1;
+          KNOWN_AI_RE.lastIndex = i + 1;
+          let mAi;
+          while ((mAi = KNOWN_AI_RE.exec(s)) !== null) {
+            if (mAi.index >= s.length) break;
+            // Per AI 2 cifre generiche (ramo c2) accetta solo quelle del
+            // nostro dominio farmaceutico, per non tagliare a caso.
+            if (mAi[0].length === 2 && !/^(10|21)$/.test(mAi[0])) continue;
+            cut = mAi.index;
+            break;
+          }
+          if (cut === -1) { ai[id] = s.substring(i); i = s.length; }
+          else { ai[id] = s.substring(i, cut); i = cut; }
+        }
         else { ai[id] = s.substring(i, nx); i = nx + 1; }
       }
     }

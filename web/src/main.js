@@ -3,13 +3,14 @@ import { parseScan } from './lib/parse.js';
 import { lookupAifa, normalizeLookupAic } from './lib/aifa.js';
 import { initStore, storeMode, saveMedicine, listMedicines, removeMedicine } from './lib/store.js';
 import { startScanner, stopScanner, toggleTorch } from './lib/scanner.js';
-let lastDrug = null; let lastParse = null; let torchOn = false; let busy = false;
+let lastDrug = null; let lastParse = null; let torchOn = false; let busy = false; let lastDbg = null;
 document.querySelector('#app').innerHTML = [
 '<header class="top"><div class="brand"><span class="cross" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><rect x="9" y="3" width="6" height="18" rx="1.5" fill="#fff"/><rect x="3" y="9" width="18" height="6" rx="1.5" fill="#fff"/></svg></span><span><strong>PharmaScan</strong><small>Armadietto farmaci &bull; dati AIFA</small></span></div><div id="mode" class="pill">locale</div></header>',
 '<main>',
 '<section class="hero"><div><h1>Riconosci il farmaco dal codice</h1><p>Scansiona fustella o DataMatrix, oppure digita l\'AIC a 9 cifre. Dati ufficiali AIFA in diretta.</p></div><div class="hero-badges"><span class="badge">AIFA</span><span class="badge ghost">PWA offline</span><span class="badge ghost">AIC &bull; GTIN &bull; Lotto</span></div></section>',
 '<section class="card"><div class="card-head"><span class="step">1</span><h2>Scansiona o cerca</h2></div>',
 '<div class="video-wrap"><video id="cam" playsinline muted></video><div class="frame"><span></span></div><div id="scanState" class="scan-state">Fotocamera spenta</div></div>',
+'<details class="cfg"><summary>Debug scansione (test sul campo)</summary><div id="dbg" class="dbg">Nessuna lettura ancora. Avvia la camera e inquadra il DataMatrix: qui vedrai raw, lunghezza, GS presente/scomparso e char-code.</div></details>',
 '<div class="row"><button id="bStart" class="primary">Avvia camera</button><button id="bStop">Stop</button><button id="bTorch">Flash</button></div>',
 '<div class="row manual-row"><input id="manual" inputmode="numeric" maxlength="12" placeholder="AIC es. 036631017 oppure A036631017" /><button id="bManual" class="primary ghost-btn">Cerca</button></div>',
 '<p id="scanMsg" class="msg" role="status"></p></section>',
@@ -45,6 +46,14 @@ function showDrug(d, p) {
     (rows.length ? '<dl class="grid">' + rows.map((r) => '<div><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>').join('') + '</dl>' : '') +
     ((p && (p.lotto || p.scadenza || p.seriale)) ? '<div class="scan-tags">' + (p.lotto ? '<span>Lotto <b>' + esc(p.lotto) + '</b></span>' : '') + (p.scadenza ? '<span>Scade <b>' + esc(p.scadenza) + '</b></span>' : '') + (p.seriale ? '<span>S/N <b>' + esc(p.seriale) + '</b></span>' : '') + '</div>' : '') +
     '<div class="links">' + (d.fogliettoUrl ? '<a href="' + esc(d.fogliettoUrl) + '" target="_blank" rel="noopener">Foglietto illustrativo</a>' : '') + (d.rcpUrl ? '<a href="' + esc(d.rcpUrl) + '" target="_blank" rel="noopener">RCP medica</a>' : '') + (d.schedaUrl ? '<a href="' + esc(d.schedaUrl) + '" target="_blank" rel="noopener">Scheda AIFA</a>' : '') + '</div>';
+}
+function showDbg(raw, dbg) {
+  lastDbg = { raw: String(raw == null ? '' : raw), dbg };
+  const el = $('dbg');
+  if (!el) return;
+  el.innerHTML = '<div><b>raw</b> len=' + dbg.len + ' GS=' + (dbg.hasGS ? 'SI(29)' : 'NO-perso') + '</div>' +
+    '<div class="dbg-raw">' + esc(dbg.pretty) + '</div>' +
+    '<div class="hint">char-code[0..80]: ' + esc(dbg.codes.slice(0, 80).join(',')) + '</div>';
 }
 let lastScanAt = 0; let lastScanText = '';
 async function handleRaw(raw) {
@@ -93,7 +102,13 @@ async function refresh() {
 }
 $('bStart').onclick = async () => {
   setMsg('Avvio fotocamera...'); $('scanState').textContent = 'Avvio...';
-  try { const info = await startScanner(video, handleRaw, () => {}); $('scanState').textContent = 'Inquadra fustella o DataMatrix'; setMsg('Inquadra fustella o DataMatrix...' + (info.cameraLabel ? ' [' + info.cameraLabel + ']' : '')); }
+  try {
+    const info = await startScanner(video, handleRaw, () => {}, {
+      torch: torchOn,
+      onRaw: function (raw, dbg) { showDbg(raw, dbg); }
+    });
+    $('scanState').textContent = 'Inquadra fustella o DataMatrix'; setMsg('Inquadra fustella o DataMatrix...' + (info.cameraLabel ? ' [' + info.cameraLabel + ']' : ''));
+  }
   catch (e) { $('scanState').textContent = 'Fotocamera non disponibile'; setMsg('Camera non disponibile: ' + e.message + ' (serve HTTPS)', 'err'); }
 };
 $('bStop').onclick = () => { stopScanner(); $('scanState').textContent = 'Fotocamera spenta'; setMsg('Scanner fermato.'); };
