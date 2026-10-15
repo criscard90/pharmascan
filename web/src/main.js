@@ -49,6 +49,8 @@ async function handleRaw(raw) {
     const aic = p.aic || (p.gtin || '').slice(0, 9) || raw.replace(/\D/g, '').slice(0, 9);
     const d = await lookupAifa(aic, p);
     showDrug(d, p);
+    // Save the scanned drug to the database
+    await saveMedicine(p);
   } catch (e) { msg.textContent = 'Errore: ' + e.message; }
 }
 
