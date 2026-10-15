@@ -1,8 +1,6 @@
 const http = require('http');
 const WebSocket = require('ws');
 const { spawn } = require('child_process');
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { createSdkAgent } = require('./cline-sdk');
 
@@ -14,22 +12,26 @@ const GITHUB_REPO = process.env.GITHUB_REPO || '';
 const GITHUB_OWNER = process.env.GITHUB_OWNER || '';
 
 // Cline CLI integration (headless agent runs)
-const CLINE_BIN = process.env.CLINE_BIN || 'cline';
+const CLINE_BIN = process.env.CLINE_BIN || process.execPath;
+const CLINE_ENTRY = path.join(__dirname, 'node_modules', 'cline', 'bin', 'cline');
 // Default to the repo root (parent of bridge/) so the agent operates on the project
 const CLINE_CWD = process.env.CLINE_CWD || path.resolve(__dirname, '..');
-const CLINE_PROVIDER = process.env.CLINE_PROVIDER || '';
+const CLINE_PROVIDER = process.env.CLINE_PROVIDER || 'cline';
 const CLINE_MODEL = process.env.CLINE_MODEL || '';
 const CLINE_API_KEY = process.env.CLINE_API_KEY || '';
 const CLINE_THINKING = process.env.CLINE_THINKING || '';
-const CLINE_RUNTIME = process.env.CLINE_RUNTIME || 'sdk';
+const CLINE_RUNTIME = process.env.CLINE_RUNTIME || 'cli';
 // Keep only recent turns when replaying conversation context (costs input tokens)
 const MAX_HISTORY_MESSAGES = parseInt(process.env.CLINE_MAX_HISTORY || '20', 10);
+const CLINE_MODELS_CACHE_MS = 6 * 60 * 60 * 1000;
 
 // Per-client auth state and Cline task tracking
 const authedClients = new Set();
 const conversations = new Map();   // clientId -> [{ role, content }]
 const runningTasks = new Map();    // clientId -> ChildProcess
 const runningAgents = new Map();   // clientId -> { agent, cancelled }
+let clineAuthProcess = null;
+let clineModelsCache = { expiresAt: 0, models: null };
 const partials = new Map();        // clientId -> streamed-so-far text
 const stoppedClients = new Set();  // clientId with an intentional stop
 
@@ -318,34 +320,193 @@ function handleChatMessage(clientId, message) {
         sendTo(clientId, { type: 'error', payload: { error: 'Messaggio vuoto' } });
         return;
     }
-    const provider = payload.provider;
+    const providerId = payload.providerId || (payload.provider === 'openrouter' ? 'openai-compatible' : '');
     const model = payload.model;
     const apiKey = payload.apiKey;
+    const baseUrl = payload.baseUrl || '';
     const conversationId = typeof payload.conversationId === 'string' && payload.conversationId.trim()
         ? payload.conversationId.trim()
         : 'default';
-    if (provider !== 'openrouter') {
-        sendTo(clientId, { type: 'error', payload: { error: 'Unsupported provider: select OpenRouter in the app.' } });
+    if (typeof providerId !== 'string' || !providerId.trim()) {
+        sendTo(clientId, { type: 'error', payload: { error: 'Provider ID missing: configure it in the app Settings.' } });
         return;
     }
-    if (typeof model !== 'string' || !model.endsWith(':free')) {
-        sendTo(clientId, { type: 'error', payload: { error: 'Select a free OpenRouter model that is compatible with Cline.' } });
+    if (typeof model !== 'string' || !model.trim()) {
+        sendTo(clientId, { type: 'error', payload: { error: 'Model ID missing: configure it in the app Settings.' } });
         return;
     }
-    if (typeof apiKey !== 'string' || !apiKey.trim()) {
-        sendTo(clientId, { type: 'error', payload: { error: 'OpenRouter key missing: configure it in the app Settings.' } });
+    if (apiKey != null && typeof apiKey !== 'string') {
+        sendTo(clientId, { type: 'error', payload: { error: 'Provider API key must be a string.' } });
+        return;
+    }
+    if (CLINE_RUNTIME !== 'cli' && (typeof apiKey !== 'string' || !apiKey.trim())) {
+        sendTo(clientId, { type: 'error', payload: { error: 'Provider API key missing: configure it in the app Settings.' } });
+        return;
+    }
+    if (typeof baseUrl !== 'string') {
+        sendTo(clientId, { type: 'error', payload: { error: 'Base URL must be a string.' } });
+        return;
+    }
+    if (baseUrl.trim()) {
+        let parsedBaseUrl;
+        try {
+            parsedBaseUrl = new URL(baseUrl);
+        } catch {
+            sendTo(clientId, { type: 'error', payload: { error: 'Base URL must be a valid HTTP or HTTPS URL.' } });
+            return;
+        }
+        if (!['http:', 'https:'].includes(parsedBaseUrl.protocol)) {
+            sendTo(clientId, { type: 'error', payload: { error: 'Base URL must use HTTP or HTTPS.' } });
+            return;
+        }
+    }
+    if (CLINE_RUNTIME === 'cli' && baseUrl.trim()) {
+        sendTo(clientId, {
+            type: 'error',
+            payload: { error: 'Custom base URLs are supported by the SDK runtime, not CLINE_RUNTIME=cli.' }
+        });
         return;
     }
     if (CLINE_RUNTIME === 'cli') {
-        runClineCli(clientId, conversationId, text.trim(), { provider, model, apiKey: apiKey.trim() });
+        runClineCli(clientId, conversationId, text.trim(), {
+            provider: providerId.trim(),
+            model: model.trim(),
+            apiKey: typeof apiKey === 'string' ? apiKey.trim() : ''
+        });
     } else if (CLINE_RUNTIME === 'sdk') {
-        runClineSdk(clientId, conversationId, text.trim(), { provider, model, apiKey: apiKey.trim() });
+        runClineSdk(clientId, conversationId, text.trim(), {
+            providerId: providerId.trim(),
+            model: model.trim(),
+            apiKey: apiKey.trim(),
+            baseUrl: baseUrl.trim()
+        });
     } else {
         sendTo(clientId, {
             type: 'error',
-            payload: { error: `Unsupported CLINE_RUNTIME "${sanitizeErrorText(CLINE_RUNTIME)}"; use "sdk" or "cli".` }
+            payload: { error: `Unsupported CLINE_RUNTIME "${sanitizeErrorText(CLINE_RUNTIME)}"; use "cli" or "sdk".` }
         });
     }
+}
+
+async function getFreeClineModels() {
+    if (clineModelsCache.expiresAt > Date.now() && clineModelsCache.models) {
+        return clineModelsCache.models;
+    }
+    const { fetchLiveProviderModels } = await import('@cline/llms');
+    const providerModels = await fetchLiveProviderModels(
+        'https://models.dev/api.json',
+        fetch,
+        { includeClineCloudModels: true }
+    );
+    const models = normalizeFreeClineModels(providerModels.cline || {});
+    if (!models.length) throw new Error('Cline returned no free models in its current catalog.');
+    clineModelsCache = { expiresAt: Date.now() + CLINE_MODELS_CACHE_MS, models };
+    return models;
+}
+
+function normalizeFreeClineModels(providerModels) {
+    return Object.entries(providerModels)
+        .filter(([id]) => id.startsWith('cline-free/'))
+        .map(([id, model]) => ({
+            id,
+            name: typeof model.name === 'string' && model.name.trim() ? model.name : id,
+            description: typeof model.description === 'string' ? model.description : ''
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function sendFreeClineModels(clientId) {
+    try {
+        const models = await getFreeClineModels();
+        sendTo(clientId, { type: 'cline_models', payload: { models } });
+    } catch (error) {
+        const detail = sanitizeErrorText(error && error.message ? error.message : error);
+        console.error('Failed to load Cline free-model catalog:', detail);
+        sendTo(clientId, { type: 'cline_models_error', payload: { error: detail } });
+    }
+}
+
+function cleanClineAuthOutput(text) {
+    return sanitizeErrorText(String(text).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ''));
+}
+
+function startClineAuth(clientId) {
+    if (clineAuthProcess && clineAuthProcess.exitCode == null && !clineAuthProcess.killed) {
+        sendTo(clientId, {
+            type: 'cline_auth_event',
+            payload: { state: 'error', text: 'A Cline sign-in is already in progress.' }
+        });
+        return;
+    }
+
+    sendTo(clientId, {
+        type: 'cline_auth_event',
+        payload: { state: 'started', text: 'Starting Cline sign-in…' }
+    });
+
+    let child;
+    try {
+        child = spawnCline(['auth', 'cline'], {
+            cwd: CLINE_CWD,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+    } catch (error) {
+        sendTo(clientId, {
+            type: 'cline_auth_event',
+            payload: { state: 'error', text: `Unable to start Cline sign-in: ${sanitizeErrorText(error.message)}` }
+        });
+        return;
+    }
+
+    clineAuthProcess = child;
+    const buffers = { stdout: '', stderr: '' };
+    let spawnFailed = false;
+    const forwardOutput = (stream, data, flush = false) => {
+        buffers[stream] += data;
+        let newline;
+        while ((newline = buffers[stream].indexOf('\n')) >= 0) {
+            const line = buffers[stream].slice(0, newline).replace(/\r$/, '');
+            buffers[stream] = buffers[stream].slice(newline + 1);
+            const text = cleanClineAuthOutput(line);
+            if (text) {
+                sendTo(clientId, { type: 'cline_auth_event', payload: { state: 'output', text } });
+            }
+        }
+        if (flush && buffers[stream].trim()) {
+            const text = cleanClineAuthOutput(buffers[stream]);
+            buffers[stream] = '';
+            if (text) {
+                sendTo(clientId, { type: 'cline_auth_event', payload: { state: 'output', text } });
+            }
+        }
+    };
+    child.stdout.on('data', data => forwardOutput('stdout', data.toString()));
+    child.stderr.on('data', data => forwardOutput('stderr', data.toString()));
+    child.on('error', error => {
+        spawnFailed = true;
+        sendTo(clientId, {
+            type: 'cline_auth_event',
+            payload: { state: 'error', text: `Cline sign-in failed: ${sanitizeErrorText(error.message)}` }
+        });
+    });
+    child.on('close', code => {
+        forwardOutput('stdout', '', true);
+        forwardOutput('stderr', '', true);
+        if (clineAuthProcess === child) {
+            clineAuthProcess = null;
+        }
+        if (spawnFailed) return;
+        const succeeded = code === 0;
+        sendTo(clientId, {
+            type: 'cline_auth_event',
+            payload: {
+                state: succeeded ? 'completed' : 'error',
+                text: succeeded
+                    ? 'Cline sign-in completed.'
+                    : `Cline sign-in exited with code ${code}.`
+            }
+        });
+    });
 }
 
 async function handleMessage(clientId, message) {
@@ -365,6 +526,16 @@ async function handleMessage(clientId, message) {
         case 'chat_message':
             if (!requireAuth(clientId)) break;
             handleChatMessage(clientId, message);
+            break;
+
+        case 'cline_models_request':
+            if (!requireAuth(clientId)) break;
+            await sendFreeClineModels(clientId);
+            break;
+
+        case 'cline_auth_start':
+            if (!requireAuth(clientId)) break;
+            startClineAuth(clientId);
             break;
 
         case 'chat_stop':
@@ -533,6 +704,11 @@ function buildClineArgs(config = {}) {
     return args;
 }
 
+function spawnCline(args, options) {
+    const commandArgs = process.env.CLINE_BIN ? args : [CLINE_ENTRY, ...args];
+    return spawn(CLINE_BIN, commandArgs, options);
+}
+
 async function runClineSdk(clientId, conversationId, userText, config) {
     stopCline(clientId);
 
@@ -548,7 +724,9 @@ async function runClineSdk(clientId, conversationId, userText, config) {
             conversationId: contextKey,
             cwd: CLINE_CWD,
             history: history.slice(-MAX_HISTORY_MESSAGES),
-            model: config.model
+            model: config.model,
+            providerId: config.providerId,
+            baseUrl: config.baseUrl
         });
         task.agent = agent;
         if (task.cancelled) {
@@ -640,23 +818,13 @@ function runClineCli(clientId, conversationId, userText, config) {
         ? `${transcript}\n\nUser: ${userText}\n\nAssistant:`
         : userText;
 
-    let configDir;
-    try {
-        configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cline-mobile-'));
-    } catch (e) {
-        sendTo(clientId, { type: 'error', payload: { error: `Unable to prepare Cline configuration: ${e.message}` } });
-        return;
-    }
-    const args = buildClineArgs({ ...config, configDir });
+    const args = buildClineArgs(config);
     args.push(prompt); // positional prompt
 
     let child;
     try {
-        child = spawn(CLINE_BIN, args, { cwd: CLINE_CWD, stdio: ['pipe', 'pipe', 'pipe'] });
+        child = spawnCline(args, { cwd: CLINE_CWD, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
-        fs.rm(configDir, { recursive: true, force: true }, (cleanupError) => {
-            if (cleanupError) console.error('Cline config cleanup failed:', cleanupError.message);
-        });
         sendTo(clientId, { type: 'error', payload: { error: `Unable to start Cline: ${e.message}` } });
         return;
     }
@@ -702,9 +870,6 @@ function runClineCli(clientId, conversationId, userText, config) {
 
     child.on('close', (code) => {
         runningTasks.delete(clientId);
-        fs.rm(configDir, { recursive: true, force: true }, (cleanupError) => {
-            if (cleanupError) console.error('Cline config cleanup failed:', cleanupError.message);
-        });
         const wasStopped = stoppedClients.delete(clientId);
         const partial = partials.get(clientId) || '';
         partials.delete(clientId);
@@ -849,6 +1014,8 @@ module.exports = {
     conversationKey,
     extractDelta,
     formatClineError,
+    getFreeClineModels,
+    normalizeFreeClineModels,
     fetchUser,
     handleMessage,
     toSdkMessages: require('./cline-sdk').toSdkMessages
