@@ -12,7 +12,12 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@cline/sdk": "0.0.93",
+    "@cline/agents": "0.0.93",
     "ws": "^8.16.0"
+  },
+  "overrides": {
+    "@fastify/busboy": "3.2.3",
+    "node-forge": "1.4.0",
+    "undici": "6.29.0"
   }
 }
