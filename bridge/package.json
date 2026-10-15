@@ -13,6 +13,8 @@
   "license": "MIT",
   "dependencies": {
     "@cline/agents": "0.0.93",
+    "@cline/llms": "0.0.93",
+    "cline": "3.0.71",
     "ws": "^8.16.0"
   },
   "overrides": {
