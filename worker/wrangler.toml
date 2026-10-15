@@ -1,0 +1,12 @@
+# PharmaScan — Cloudflare Worker (proxy AIFA anti-CORS)
+# Deploy:  cd worker && npx wrangler deploy
+# Oppure:  npx wrangler deploy --config worker/wrangler.toml
+name = "pharmascan-aifa"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Eventuale dominio custom (opzionale):
+# routes = [{ pattern = "aifa.tuodominio.it/*", zone_name = "tuodominio.it" }]
+
+[observability]
+enabled = true

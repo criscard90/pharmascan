@@ -33,6 +33,7 @@ function readLS() { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'
 function writeLS(o) { localStorage.setItem(LS_KEY, JSON.stringify(o)); }
 
 export async function saveMedicine(item) {
+  if (!item || !item.aic) return null;
   const rec = Object.assign({}, item, { updatedAt: new Date().toISOString() });
   if (db) {
     await setDoc(doc(db, 'armadietto', rec.aic), Object.assign({}, rec, { updatedAt: serverTimestamp() }), { merge: true });
