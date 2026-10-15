@@ -17,11 +17,13 @@ if ! command -v npm >/dev/null 2>&1; then
   echo "ERROR: npm is unavailable; cannot install bridge dependencies." >&2
   exit 1
 fi
-if ! npm install --no-audit --no-fund; then
-  echo "ERROR: bridge dependency installation failed; bridge not started." >&2
-  exit 1
+if [ ! -d node_modules/ws ] || [ ! -x node_modules/cline/bin/.cline ]; then
+  if ! npm install --no-audit --no-fund; then
+    echo "ERROR: bridge dependency installation failed; bridge not started." >&2
+    exit 1
+  fi
 fi
-if [ ! -x node_modules/.bin/cline ]; then
+if [ ! -x node_modules/cline/bin/.cline ]; then
   echo "ERROR: the pinned Cline CLI is unavailable; bridge not started." >&2
   exit 1
 fi
