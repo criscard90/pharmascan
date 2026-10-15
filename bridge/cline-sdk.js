@@ -182,7 +182,15 @@ function createRepositoryTools(cwd) {
     return [readFile, searchCodebase, writeFile, runCommand];
 }
 
-async function createSdkAgent({ apiKey, conversationId, cwd, history, model }) {
+async function createSdkAgent({
+    apiKey,
+    baseUrl,
+    conversationId,
+    cwd,
+    history,
+    model,
+    providerId
+}) {
     const { Agent } = await import('@cline/agents');
     const tools = createRepositoryTools(cwd);
     const toolPolicies = Object.fromEntries(
@@ -191,10 +199,10 @@ async function createSdkAgent({ apiKey, conversationId, cwd, history, model }) {
 
     return new Agent({
         clientName: 'cline-agent-mobile',
-        providerId: 'openai-compatible',
+        providerId,
         modelId: model,
         apiKey,
-        baseUrl: OPENROUTER_BASE_URL,
+        ...(baseUrl ? { baseUrl } : {}),
         conversationId,
         systemPrompt:
             'You are Cline, an autonomous coding agent working in the current repository. ' +
