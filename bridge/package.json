@@ -8,10 +8,11 @@
     "start": "node server.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "license": "MIT",
   "dependencies": {
+    "@cline/sdk": "0.0.93",
     "ws": "^8.16.0"
   }
 }
