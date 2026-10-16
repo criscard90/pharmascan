@@ -103,7 +103,10 @@ async function refresh() {
 $('bStart').onclick = async () => {
   setMsg('Avvio fotocamera...'); $('scanState').textContent = 'Avvio...';
   try {
-    const info = await startScanner(video, handleRaw, () => {}, {
+    const info = await startScanner(video, handleRaw, (error) => {
+      $('scanState').textContent = 'Problema durante la scansione';
+      setMsg('Errore scanner: ' + error.message, 'err');
+    }, {
       torch: torchOn,
       onRaw: function (raw, dbg) { showDbg(raw, dbg); }
     });

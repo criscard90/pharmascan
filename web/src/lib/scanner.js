@@ -12,7 +12,7 @@ let preview = null;
 let scanCanvas = null;
 let scanContext = null;
 
-const SCAN_REGION_WIDTH = 0.54;
+const SCAN_REGION_WIDTH = 0.7;
 
 export async function listCameras() {
   const devs = await navigator.mediaDevices.enumerateDevices();
@@ -79,7 +79,8 @@ export async function startScanner(videoEl, onResult, onError, opts) {
       }
     } catch (e) {}
     scanCanvas = document.createElement('canvas');
-    scanContext = scanCanvas.getContext('2d');
+    scanContext = scanCanvas.getContext('2d', { willReadFrequently: true });
+    if (!scanContext) scanContext = scanCanvas.getContext('2d');
     if (!scanContext) throw new Error('Impossibile preparare l’immagine della fotocamera');
     scanning = true;
     scanFrame(videoEl, onResult, onError, o);
@@ -116,19 +117,18 @@ function scanFrame(videoEl, onResult, onError, opts) {
     const canvasHeight = Math.round(regionHeight);
     if (scanCanvas.width !== canvasWidth) scanCanvas.width = canvasWidth;
     if (scanCanvas.height !== canvasHeight) scanCanvas.height = canvasHeight;
-    scanContext.drawImage(
-      videoEl,
-      viewX + (viewWidth - regionWidth) / 2,
-      viewY + (viewHeight - regionHeight) / 2,
-      regionWidth,
-      regionHeight,
-      0,
-      0,
-      canvasWidth,
-      canvasHeight
-    );
-
     try {
+      scanContext.drawImage(
+        videoEl,
+        viewX + (viewWidth - regionWidth) / 2,
+        viewY + (viewHeight - regionHeight) / 2,
+        regionWidth,
+        regionHeight,
+        0,
+        0,
+        canvasWidth,
+        canvasHeight
+      );
       const result = reader.decodeFromCanvas(scanCanvas);
       const text = result.getText();
       if (text && opts.onRaw) opts.onRaw(text, debugRaw(text));
