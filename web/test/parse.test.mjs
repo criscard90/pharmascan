@@ -1,4 +1,4 @@
-import { parseScan } from '../src/lib/parse.js';
+import { isValidAic, parseScan } from '../src/lib/parse.js';
 import assert from 'node:assert';
 
 let n = 0;
@@ -24,6 +24,11 @@ eq(gIt.gtin, '08032089001236', 'gs1-it gtin');
 eq(gIt.lotto, '112345678', 'gs1-it lotto');
 eq(gIt.scadenza, '2027-10-30', 'gs1-it scadenza');
 eq(gIt.seriale, '01234567890', 'gs1-it seriale');
+const gIt716Separated = parseScan(']d201080320890012362101234567890' + GS + '1727103010112345678' + GS + '716098765432' + GS + '21SN2');
+eq(gIt716Separated.aic, '098765432', 'gs1-it AI 716 variabile separato');
+eq(gIt716Separated.ai['21'], 'SN2', 'gs1-it campo dopo AI 716');
+eq(isValidAic('098765432'), true, 'aic valido con zero iniziale');
+eq(isValidAic('198765432'), false, 'aic non valido senza zero iniziale');
 
 // GS1 con parentesi: AIC via 716 (IT) e via 7001 (compatibilità estero/demo)
 const g = parseScan('(01)08001234567890(17)260131(10)LOT77(21)SN1(716)036631017');

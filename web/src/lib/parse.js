@@ -1,6 +1,6 @@
 // PharmaScan - parsing AIC (DM 6/3/2025 + Spec sezione 3).
 // - Code32 fustella: "A012345678" -> AIC 9 cifre.
-// - GS1 DataMatrix italiano: AI 01 GTIN(14) + 21 seriale + 17 scadenza(6) + 10 lotto + 716 AIC(9).
+// - GS1 DataMatrix italiano: AI 01 GTIN(14) + 21 seriale + 17 scadenza(6) + 10 lotto + 716 AIC.
 //   (NO AI 7001: quello è di altri paesi; in Italia l'AIC viaggia con AI nazionale 716.)
 // - Riga stampata HRI: "PC:.. SN:.. SCAD:.. LOTTO:.. AIC:.."
 export const GS = String.fromCharCode(29);
@@ -23,7 +23,7 @@ export function normalizeRaw(input) {
   return s;
 }
 
-export function isValidAic(a) { return /^[0-9]{9}$/.test(a || ''); }
+export function isValidAic(a) { return /^0[0-9]{8}$/.test(a || ''); }
 
 export function parseCode32(raw) {
   const s = normalizeRaw(raw).replace(/[\s\-.]/g, '');
@@ -42,17 +42,17 @@ export function parseGS1(rawInput) {
     while ((m = re.exec(up)) !== null) ai[m[1]] = m[2].split(GS).join('');
   } else {
     let s = up.replace(/^\]D[1-6]/, '');
-    // Lunghezze fisse: 01 GTIN(14), 17 scadenza(6), 716 AIC-IT(9).
-    const fixed = { '01': 14, 17: 6, 716: 9 };
-    // Variabili (terminate da <GS> o fine stringa): 10 lotto, 21 seriale.
-    // (7001 tenuto per compatibilità con DataMatrix esteri/demo.)
-    const vari = { 10: 1, 21: 1, 7001: 1 };
+    // Lunghezze fisse: 01 GTIN(14), 17 scadenza(6).
+    const fixed = { '01': 14, 17: 6 };
+    // Variabili (terminate da <GS> o fine stringa): lotto, seriale e NHRN.
+    // AI 716 è an..20 secondo GS1; il valore AIC italiano è comunque 9 cifre.
+    const vari = { 10: 1, 21: 1, 7001: 1, 716: 1 };
     // AI note nell'ordine tipico del DataMatrix farmaceutico IT:
     // 01(GTIN) 21(seriale) 17(scadenza) 10(lotto) 716(AIC).
     // Serve per ri-splittare i campi variabili quando lo scanner fonde
     // tutto in una stringa continua SENZA <GS> (caso tipico da fotocamera
     // se il wedge/lib perde il codeword FNC1 232 -> ASCII 29).
-    const KNOWN_AI_RE = /01(?=\d{14})|17(?=\d{6})|716(?=\d{9})|7001(?=\d+)|10|21/g;
+    const KNOWN_AI_RE = /01(?=\d{14})|17(?=\d{6})|716(?=0\d{8}(?:\x1D|$))|7001(?=\d+)|10|21/g;
     let i = 0, guard = 0;
     while (i < s.length && guard++ < 60) {
       let id = null;
@@ -109,12 +109,11 @@ export function parseGS1(rawInput) {
     scadenza = '20' + yy + '-' + mm + '-' + dd;
   }
   let aic = null;
-  // Italia (DM 6/3/2025): AIC con AI nazionale 716 (9 cifre).
+  // L'AIC italiano è composto da 9 cifre e inizia con zero.
   for (const k of ['716', '7001']) {
     if (!ai[k]) continue;
-    const d = String(ai[k]).replace(/\D/g, '');
-    const m = d.match(/([0-9]{9})/);
-    if (m) { aic = m[1]; break; }
+    const d = String(ai[k]).trim();
+    if (/^0[0-9]{8}$/.test(d)) { aic = d; break; }
   }
   // Pseudo-AI "02" di alcuni scanner economici che mappano l'AIC dopo il GTIN.
   if (!aic && ai['02']) {
@@ -130,7 +129,7 @@ export function parseGS1(rawInput) {
 export function parseScan(rawInput) {
   const raw = String(rawInput == null ? '' : rawInput);
   const up = normalizeRaw(raw);
-  const looksGS1 = /\(01\)|\(716\)|\(7001\)|\(10\)|\(17\)|\(21\)/.test(up)
+  const looksGS1 = /^\]D2/.test(up) || /\(01\)|\(716\)|\(7001\)|\(10\)|\(17\)|\(21\)/.test(up)
     || /(?:^|[\s;])(PC|SN|SCAD|LOTTO|AIC)\s*:/.test(up)
     || up.indexOf(GS) !== -1 || /^01\d{14}/.test(up.replace(/^\]D[1-6]/, ''));
   if (looksGS1) {
