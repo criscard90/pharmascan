@@ -22,7 +22,7 @@ main { max-width: 680px; margin: 0 auto; padding: 14px 14px 30px; display: grid;
 .count { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
 .video-wrap { position: relative; border-radius: 14px; overflow: hidden; background: #04120d; aspect-ratio: 4/3; border: 1px solid #0e2f24; }
 video { width: 100%; height: 100%; object-fit: cover; display: block; }
-.frame { position: absolute; inset: 20px; border: 2px dashed rgba(255,255,255,.85); border-radius: 12px; pointer-events: none; }
+.frame { position: absolute; top: 50%; left: 50%; width: 54%; aspect-ratio: 1; transform: translate(-50%, -50%); border: 2px dashed rgba(255,255,255,.9); border-radius: 12px; box-shadow: 0 0 0 999px rgba(0,0,0,.35); pointer-events: none; }
 .frame span { position: absolute; left: 0; right: 0; top: -2px; height: 2px; background: #37e0a0; animation: scan 2.4s linear infinite; }
 @keyframes scan { 0% { top: 0; } 50% { top: 100%; } 100% { top: 0; } }
 .scan-state { position: absolute; left: 10px; bottom: 10px; background: rgba(0,0,0,.55); color: #fff; font-size: 12px; padding: 5px 10px; border-radius: 999px; }

@@ -80,7 +80,7 @@ async function refresh() {
 }
 $('bStart').onclick = async () => {
   setMsg('Avvio fotocamera...'); $('scanState').textContent = 'Avvio...';
-  try { const info = await startScanner(video, handleRaw, () => {}); $('scanState').textContent = 'Inquadra fustella o DataMatrix'; setMsg('Inquadra fustella o DataMatrix...' + (info.cameraLabel ? ' [' + info.cameraLabel + ']' : '')); }
+  try { const info = await startScanner(video, handleRaw, () => {}); $('scanState').textContent = 'Inquadra il DataMatrix nel riquadro'; setMsg('Inquadra il DataMatrix nel riquadro...' + (info.cameraLabel ? ' [' + info.cameraLabel + ']' : '')); }
   catch (e) { $('scanState').textContent = 'Fotocamera non disponibile'; setMsg('Camera non disponibile: ' + e.message + ' (serve HTTPS)', 'err'); }
 };
 $('bStop').onclick = () => { stopScanner(); $('scanState').textContent = 'Fotocamera spenta'; setMsg('Scanner fermato.'); };
