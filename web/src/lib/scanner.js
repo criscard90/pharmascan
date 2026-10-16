@@ -3,7 +3,7 @@
 // Indurito per DataMatrix farmaceutico piccolo: risoluzione 1280x720,
 // TRY_HARDER + ASSUME_GS1, focus continuo, overlay debug char-code.
 import { BrowserMultiFormatReader } from '@zxing/browser';
-import { DecodeHintType, BarcodeFormat } from '@zxing/library';
+import { DecodeHintType, BarcodeFormat, ChecksumException, FormatException, NotFoundException } from '@zxing/library';
 
 let reader = null;
 let stream = null;
@@ -131,12 +131,18 @@ function scanFrame(videoEl, onResult, onError, opts) {
         canvasHeight
       );
       const result = reader.decodeFromCanvas(scanCanvas);
+      if (result.getBarcodeFormat() !== BarcodeFormat.DATA_MATRIX) {
+        scanTimer = setTimeout(function () { scanFrame(videoEl, onResult, onError, opts); }, 200);
+        return;
+      }
       const text = result.getText();
       if (text && opts.onRaw) opts.onRaw(text, debugRaw(text));
       if (text) onResult(text);
     } catch (e) {
-      const name = String(e && e.name || '');
-      if (name !== 'NotFoundException' && name !== 'ChecksumException' && name !== 'FormatException' && onError) onError(e);
+      const expectedDecodeFailure = e instanceof NotFoundException
+        || e instanceof ChecksumException
+        || e instanceof FormatException;
+      if (!expectedDecodeFailure && onError) onError(e);
     }
   }
   scanTimer = setTimeout(function () { scanFrame(videoEl, onResult, onError, opts); }, 200);
