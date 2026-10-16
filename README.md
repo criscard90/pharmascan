@@ -4,7 +4,11 @@ Spec: `Specifiche Tecniche - App PWA Scansione Farmaci e AIFA.docx` (§1-§5).
 
 ## Struttura
 - `web/` — PWA Vite + Vanilla JS (manifest, SW, scanner ZXing, parsing AIC/GS1, store Firestore+locale)
-- `functions/` — Cloud Function `lookupAic` (middleware anti-CORS verso AIFA)
+  - lookup AIFA **diretto** (`web/src/lib/aifa.js`): l'API open-data
+    `https://api.aifa.gov.it/aifa-bdf-eif-be/1.0.0` espone `Access-Control-Allow-Origin: *`,
+    quindi **non serve nessun proxy/worker anti-CORS**.
+- `worker/` — legacy non usato (tenuto solo per riferimento, non referenziato dalla UI)
+- `functions/` — legacy non usato (tenuto solo per riferimento, non referenziato dalla UI)
 
 ## Deploy su GitHub Pages (per provarla da mobile)
 
@@ -45,31 +49,13 @@ VITE_FB_PROJECT=...
 ```
 L'armadietto usa Firestore (`armadietto/{AIC}`) con persistenza IndexedDB; senza config usa `localStorage`.
 
-## URL Cloud Function AIFA (trasparente, zero-config per l'utente)
+## URL AIFA (diretto, nessun proxy da configurare)
+Nessuna configurazione richiesta: l'app chiama direttamente
+`https://api.aifa.gov.it/aifa-bdf-eif-be/1.0.0/formadosaggio/ricerca?query={AIC}&page=0`
+(verificato: risponde con `Access-Control-Allow-Origin: *`, quindi niente CORS da aggirare).
+Senza rete, il lookup mostra DEMO/sconosciuto ma AIC+lotto+scadenza vengono salvati comunque.
 
-L'utente non deve incollare nessun URL: il campo resta solo in
-*Impostazioni avanzate* per debug, mentre l'app prova in ordine:
-
-1. override manuale `localStorage` (solo debug);
-2. `VITE_AIFA_FN_URL` (build-time, es. secret `VITE_AIFA_FN_URL` su GitHub Pages);
-3. same-origin `/api/lookupAic` — su Firebase Hosting il rewrite in
-   `firebase.json` gira verso `lookupAic` senza CORS e senza URL visibile;
-4. fallback demo/offline (`AIC+lotto+scadenza` salvati comunque).
-
-Perché il proxy resta necessario: il browser blocca `fetch` diretto verso
-`medicinali.aifa.gov.it` (manca `Access-Control-Allow-Origin`). Senza proxy,
-`041962010` "funziona" solo in apparenza: ritorna
-`Farmaco AIC 041962010 (dati da completare)` con `fonte: sconosciuto`
-(nessun nome/principio/titolare reali).
-
-Deploy trasparente consigliato per distribuzione:
-```bash
-firebase deploy --only hosting,functions,firestore:rules
-```
-Ogni client usa poi `/api/lookupAic?aic=...` sullo stesso dominio: nessun
-campo da compilare.
-
-## Test parser (Code32 + GS1)
+## Test parser (Code32 + GS1 italiano DM 6/3/2025 con AI 716)
 ```bash
 cd web
 node test/parse.test.mjs
