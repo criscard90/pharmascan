@@ -3,6 +3,7 @@ import { parseScan } from './lib/parse.js';
 import { lookupAifa, normalizeLookupAic } from './lib/aifa.js';
 import { initStore, storeMode, saveMedicine, listMedicines, removeMedicine } from './lib/store.js';
 import { startScanner, stopScanner, toggleTorch } from './lib/scanner.js';
+import { BarcodeFormat } from '@zxing/library';
 let lastDrug = null; let lastParse = null; let torchOn = false; let busy = false; let lastDbg = null;
 document.querySelector('#app').innerHTML = [
 '<header class="top"><div class="brand"><span class="cross" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><rect x="9" y="3" width="6" height="18" rx="1.5" fill="#fff"/><rect x="3" y="9" width="18" height="6" rx="1.5" fill="#fff"/></svg></span><span><strong>PharmaScan</strong><small>Armadietto farmaci &bull; dati AIFA</small></span></div><div id="mode" class="pill">locale</div></header>',
@@ -56,7 +57,7 @@ function showDbg(raw, dbg) {
     '<div class="hint">char-code[0..80]: ' + esc(dbg.codes.slice(0, 80).join(',')) + '</div>';
 }
 let lastScanAt = 0; let lastScanText = '';
-async function handleRaw(raw) {
+async function handleRaw(raw, barcodeFormat) {
   // Debounce: lo scanner spara lo stesso frame più volte al secondo.
   // Se è lo stesso testo entro 2.5s, ignoralo (evita lookup doppi e
   // soprattutto evita di mostrare errori su frammenti già gestiti).
@@ -69,6 +70,10 @@ async function handleRaw(raw) {
     setMsg('Lettura codice...');
     const p = parseScan(txt);
     lastParse = p;
+    if (barcodeFormat === BarcodeFormat.DATA_MATRIX && p.format === 'guess-9digits') {
+      setMsg('DataMatrix letto, ma il contenuto non contiene un AIC GS1 riconosciuto. Controlla che il codice sia completo o inserisci l’AIC stampato sulla confezione.', 'err');
+      return;
+    }
     // Caso GTIN senza AIC (matrix vecchia senza AI 716): guida l'utente
     // alla fustella invece di sparare "AIC non trovato".
     if (!p.aic && p.gtin) {

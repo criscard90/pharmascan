@@ -137,7 +137,7 @@ function scanFrame(videoEl, onResult, onError, opts) {
       }
       const text = result.getText();
       if (text && opts.onRaw) opts.onRaw(text, debugRaw(text));
-      if (text) onResult(text);
+      if (text) onResult(text, result.getBarcodeFormat());
     } catch (e) {
       const expectedDecodeFailure = e instanceof NotFoundException
         || e instanceof ChecksumException
