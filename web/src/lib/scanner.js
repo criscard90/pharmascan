@@ -2,7 +2,8 @@
 // Formati: CODE_39/Code32 fustella + DATA_MATRIX GS1.
 // Indurito per DataMatrix farmaceutico piccolo: risoluzione 1280x720,
 // TRY_HARDER + ASSUME_GS1, focus continuo, overlay debug char-code.
-import { BrowserMultiFormatReader, DecodeHintType, BarcodeFormat } from '@zxing/library';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+import { DecodeHintType, BarcodeFormat } from '@zxing/library';
 
 let reader = null;
 let stream = null;
